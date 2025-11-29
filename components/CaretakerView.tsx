@@ -9,11 +9,12 @@ interface CaretakerViewProps {
   medicines: Medicine[];
   addMedicine: (med: Omit<Medicine, 'id'>) => void;
   logs: Log[];
+  onTestSMS?: () => void;
 }
 
 type CaretakerSubView = 'SCHEDULE' | 'ADD' | 'REPORT';
 
-const CaretakerView: React.FC<CaretakerViewProps> = ({ medicines, addMedicine, logs }) => {
+const CaretakerView: React.FC<CaretakerViewProps> = ({ medicines, addMedicine, logs, onTestSMS }) => {
   const [activeSubView, setActiveSubView] = useState<CaretakerSubView>('SCHEDULE');
 
   const activeBtnClasses = "bg-blue-600 text-white";
@@ -32,7 +33,14 @@ const CaretakerView: React.FC<CaretakerViewProps> = ({ medicines, addMedicine, l
       case 'SCHEDULE':
         return (
            <div className="bg-white p-6 rounded-lg shadow-md mt-4">
-              <h3 className="text-2xl font-bold mb-4">{translations.medicineListTitle}</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-2xl font-bold">{translations.medicineListTitle}</h3>
+                {onTestSMS && (
+                    <button onClick={onTestSMS} className="text-sm bg-gray-800 text-white px-3 py-1 rounded hover:bg-black">
+                        Test SMS System
+                    </button>
+                )}
+              </div>
               <ul className="space-y-4">
                 {medicines.map(med => (
                   <li key={med.id} className="border-b pb-4 last:border-b-0 last:pb-0 flex items-center space-x-4">
