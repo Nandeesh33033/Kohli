@@ -162,10 +162,18 @@ const App: React.FC = () => {
     const formattedPhone = cleanPhone.length > 10 ? cleanPhone.slice(-10) : cleanPhone;
 
     try {
+      // Encode the entire Fast2SMS URL component properly
       const fast2SmsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_API_KEY}&message=${encodeURIComponent(message)}&language=english&route=q&numbers=${formattedPhone}&flash=0`;
-      const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(fast2SmsUrl)}`;
+      
+      // Use corsproxy.io which is more reliable for production/deployed apps
+      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(fast2SmsUrl)}`;
 
       const response = await fetch(proxyUrl);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
+
       const data = await response.json();
 
       if (data && data.return === true) {
@@ -174,8 +182,9 @@ const App: React.FC = () => {
         return { success: false, error: data?.message || "Unknown API Error" };
       }
     } catch (error: any) {
+      console.error("SMS Error:", error);
       if (error instanceof SyntaxError) {
-         return { success: false, error: "Network/Proxy Error (Invalid JSON)" };
+         return { success: false, error: "Network/Proxy Error (Invalid JSON response)" };
       }
       return { success: false, error: error.message };
     }
@@ -199,7 +208,7 @@ const App: React.FC = () => {
 
   // --- AUTHENTICATION HANDLERS ---
 
-  const handleRegister = (cPhone: string, pPhone: string, password: string, faceImage: string) => {
+  const handleRegister = (cPhone: string, pPhone: string, password: string, faceImage: string, faceDescriptor: number[]) => {
     if (allUsers.some(u => u.caretakerPhone === cPhone)) {
         alert("An account with this Caretaker Phone Number already exists.");
         return;
@@ -210,6 +219,7 @@ const App: React.FC = () => {
       patientPhone: pPhone,
       password: password,
       faceImage: faceImage,
+      faceDescriptor: faceDescriptor // Save the biometric data
     };
 
     setAllUsers(prev => [...prev, newUser]);
@@ -268,9 +278,13 @@ const App: React.FC = () => {
     // Generate Deep Link
     const actionLink = `${window.location.origin}?take_med_id=${medicine.id}`;
     
-    const messageContent = `MediRemind:\nTake ${medicine.pills} pill(s) of\n${medicine.name} (${medicine.dosage}mg)\n${foodInstruction} food.\nTime: ${formatTime12Hour(medicine.schedule.time)}.\n\nTap to Open App: ${actionLink}`;
+    // Updated Content: Removed link as per request, just info
+    const messageContent = `MediRemind:\nTake ${medicine.pills} pill(s) of\n${medicine.name} (${medicine.dosage}mg)\n${foodInstruction} food.\nTime: ${formatTime12Hour(medicine.schedule.time)}.`;
     
-    await sendSmsViaApi(targetPhone, messageContent);
+    const result = await sendSmsViaApi(targetPhone, messageContent);
+    if (!result.success && manualTrigger) {
+        alert("SMS Failed: " + result.error);
+    }
   };
 
   const checkReminders = useCallback(() => {
