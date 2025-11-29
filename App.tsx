@@ -16,11 +16,11 @@ import PatientLoginScreen from './components/PatientLoginScreen';
 const FAST2SMS_API_KEY = 'tJE8T3LG0yQIRDdNgFaKloxeZ9rXqsmiO5bMcY7Sj4hHpCvA2zHLnNZyDTIuS7c1Y4MgJklifRd3ebB9';
 
 const App: React.FC = () => {
-  // --- STATE WITH PERSISTENCE (V2 Keys to Wipe Old Data) ---
+  // --- STATE WITH PERSISTENCE (V3 Keys to Wipe Old Data) ---
   
   // 1. ALL USERS (Database Simulation)
   const [allUsers, setAllUsers] = useState<RegisteredUser[]>(() => {
-    const saved = localStorage.getItem('users_v2');
+    const saved = localStorage.getItem('users_v3');
     if (saved) {
         return JSON.parse(saved);
     }
@@ -29,19 +29,19 @@ const App: React.FC = () => {
 
   // 2. ACTIVE SESSION
   const [currentUser, setCurrentUser] = useState<RegisteredUser | null>(() => {
-    const saved = localStorage.getItem('currentUser_v2');
+    const saved = localStorage.getItem('currentUser_v3');
     return saved ? JSON.parse(saved) : null;
   });
 
   // 3. ALL MEDICINES
   const [allMedicines, setAllMedicines] = useState<Medicine[]>(() => {
-    const saved = localStorage.getItem('medicines_v2');
+    const saved = localStorage.getItem('medicines_v3');
     return saved ? JSON.parse(saved) : initialMedicines;
   });
 
   // 4. ALL LOGS
   const [allLogs, setAllLogs] = useState<Log[]>(() => {
-     const saved = localStorage.getItem('logs_v2');
+     const saved = localStorage.getItem('logs_v3');
      if (saved) {
         const parsed = JSON.parse(saved);
         return parsed.map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) }));
@@ -56,33 +56,33 @@ const App: React.FC = () => {
   
   // Persist SMS timestamps to avoid duplicate sending on refresh
   const [lastSmsTime, setLastSmsTime] = useState<Record<string, number>>(() => {
-    const saved = localStorage.getItem('lastSmsTime_v2');
+    const saved = localStorage.getItem('lastSmsTime_v3');
     return saved ? JSON.parse(saved) : {};
   });
 
   // --- PERSISTENCE EFFECTS ---
   useEffect(() => {
-    localStorage.setItem('users_v2', JSON.stringify(allUsers));
+    localStorage.setItem('users_v3', JSON.stringify(allUsers));
   }, [allUsers]);
 
   useEffect(() => {
     if (currentUser) {
-        localStorage.setItem('currentUser_v2', JSON.stringify(currentUser));
+        localStorage.setItem('currentUser_v3', JSON.stringify(currentUser));
     } else {
-        localStorage.removeItem('currentUser_v2');
+        localStorage.removeItem('currentUser_v3');
     }
   }, [currentUser]);
 
   useEffect(() => {
-    localStorage.setItem('medicines_v2', JSON.stringify(allMedicines));
+    localStorage.setItem('medicines_v3', JSON.stringify(allMedicines));
   }, [allMedicines]);
 
   useEffect(() => {
-    localStorage.setItem('logs_v2', JSON.stringify(allLogs));
+    localStorage.setItem('logs_v3', JSON.stringify(allLogs));
   }, [allLogs]);
 
   useEffect(() => {
-    localStorage.setItem('lastSmsTime_v2', JSON.stringify(lastSmsTime));
+    localStorage.setItem('lastSmsTime_v3', JSON.stringify(lastSmsTime));
   }, [lastSmsTime]);
 
   // --- DEEP LINK HANDLING ---
@@ -158,36 +158,50 @@ const App: React.FC = () => {
   const sendSmsViaApi = async (phone: string, message: string): Promise<{ success: boolean; error?: string }> => {
     if (!phone || !FAST2SMS_API_KEY) return { success: false, error: 'Missing Phone or API Key' };
 
+    // STRICT FORMATTING: Remove non-digits, take last 10
     const cleanPhone = phone.replace(/\D/g, '');
     const formattedPhone = cleanPhone.length > 10 ? cleanPhone.slice(-10) : cleanPhone;
-
-    try {
-      // Encode the entire Fast2SMS URL component properly
-      const fast2SmsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_API_KEY}&message=${encodeURIComponent(message)}&language=english&route=q&numbers=${formattedPhone}&flash=0`;
-      
-      // Use corsproxy.io which is more reliable for production/deployed apps
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(fast2SmsUrl)}`;
-
-      const response = await fetch(proxyUrl);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data && data.return === true) {
-        return { success: true };
-      } else {
-        return { success: false, error: data?.message || "Unknown API Error" };
-      }
-    } catch (error: any) {
-      console.error("SMS Error:", error);
-      if (error instanceof SyntaxError) {
-         return { success: false, error: "Network/Proxy Error (Invalid JSON response)" };
-      }
-      return { success: false, error: error.message };
+    
+    if (formattedPhone.length !== 10) {
+        return { success: false, error: `Invalid Phone Length: ${formattedPhone}` };
     }
+
+    // Fast2SMS URL
+    const fast2SmsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_API_KEY}&message=${encodeURIComponent(message)}&language=english&route=q&numbers=${formattedPhone}&flash=0`;
+
+    // PROXY STRATEGY: Try Proxy A, then Proxy B
+    const proxies = [
+        `https://corsproxy.io/?${encodeURIComponent(fast2SmsUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(fast2SmsUrl)}`
+    ];
+
+    for (const proxyUrl of proxies) {
+        try {
+            console.log(`Attempting SMS via: ${proxyUrl.substring(0, 30)}...`);
+            const response = await fetch(proxyUrl);
+            
+            if (!response.ok) {
+                console.warn("Proxy failed, trying next...");
+                continue;
+            }
+
+            const data = await response.json();
+            
+            // Check Fast2SMS specific response fields
+            if (data && data.return === true) {
+                console.log("SMS SUCCESS");
+                return { success: true };
+            } else if (data && data.message) {
+                 // API reachable but returned error (e.g. DND, insufficient funds)
+                 console.error("Fast2SMS Error:", data.message);
+                 return { success: false, error: data.message };
+            }
+        } catch (error) {
+            console.error("Network Error with Proxy:", error);
+        }
+    }
+
+    return { success: false, error: "All proxies failed. Check internet or API Key." };
   };
 
   const handleReminderTimeout = async () => {
@@ -278,12 +292,19 @@ const App: React.FC = () => {
     // Generate Deep Link
     const actionLink = `${window.location.origin}?take_med_id=${medicine.id}`;
     
-    // Updated Content: Removed link as per request, just info
-    const messageContent = `MediRemind:\nTake ${medicine.pills} pill(s) of\n${medicine.name} (${medicine.dosage}mg)\n${foodInstruction} food.\nTime: ${formatTime12Hour(medicine.schedule.time)}.`;
+    // SMS Content with Deep Link
+    const messageContent = `MediRemind:\nTake ${medicine.pills} pill(s) of\n${medicine.name} (${medicine.dosage}mg)\n${foodInstruction} food.\nTime: ${formatTime12Hour(medicine.schedule.time)}.\n\nTap to Open App: ${actionLink}`;
     
     const result = await sendSmsViaApi(targetPhone, messageContent);
-    if (!result.success && manualTrigger) {
-        alert("SMS Failed: " + result.error);
+    
+    if (manualTrigger) {
+        if (result.success) {
+            alert("SMS Sent Successfully!");
+        } else {
+            alert("SMS Failed: " + result.error);
+        }
+    } else if (!result.success) {
+        console.warn("Automated SMS failed:", result.error);
     }
   };
 
@@ -295,6 +316,7 @@ const App: React.FC = () => {
     const currentTimeStr = now.toTimeString().substring(0, 5); // HH:MM
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
+    // Check ALL medicines (globally), not just logged in user
     const medsToCheck = allMedicines;
 
     for (const med of medsToCheck) {
