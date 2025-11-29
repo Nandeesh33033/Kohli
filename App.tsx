@@ -85,29 +85,6 @@ const App: React.FC = () => {
     localStorage.setItem('lastSmsTime_v3', JSON.stringify(lastSmsTime));
   }, [lastSmsTime]);
 
-  // --- DEEP LINK HANDLING ---
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const medId = params.get('take_med_id');
-    
-    if (medId && allMedicines.length > 0) {
-        const med = allMedicines.find(m => m.id === medId);
-        if (med) {
-            const today = new Date();
-            const alreadyTaken = allLogs.some(log => 
-                log.medicineId === med.id && 
-                log.timestamp.toDateString() === today.toDateString() &&
-                log.status === 'taken'
-            );
-
-            if (!alreadyTaken) {
-                setActiveReminder(med);
-            }
-            window.history.replaceState({}, '', window.location.pathname);
-        }
-    }
-  }, [allMedicines, allLogs]);
-
   // --- HELPER FUNCTIONS ---
   const formatTime12Hour = (time24: string) => {
     if (!time24) return '';
@@ -162,85 +139,55 @@ const App: React.FC = () => {
         return { success: false, error: `Invalid Phone Length: ${formattedPhone}` };
     }
 
-    // Use POST method which is often more reliable with proxies
-    const fast2SmsUrl = `https://www.fast2sms.com/dev/bulkV2`;
-    const bodyData = new URLSearchParams({
-        "authorization": FAST2SMS_API_KEY,
-        "message": message,
-        "language": "english",
-        "route": "q",
-        "numbers": formattedPhone,
-        "flash": "0"
-    });
+    // Use GET request with encoding
+    const encodedMessage = encodeURIComponent(message);
+    const fast2SmsUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_API_KEY}&message=${encodedMessage}&language=english&route=q&numbers=${formattedPhone}&flash=0`;
 
+    // Priority Proxy List
     const proxies = [
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(fast2SmsUrl)}`,
         `https://corsproxy.io/?${encodeURIComponent(fast2SmsUrl)}`,
-        `https://thingproxy.freeboard.io/fetch/${fast2SmsUrl}`,
         `https://api.allorigins.win/raw?url=${encodeURIComponent(fast2SmsUrl)}`
     ];
 
     for (const proxyUrl of proxies) {
         try {
-            console.log(`Trying Proxy: ${proxyUrl}`);
-            
-            // Note: For corsproxy.io we can pipe the POST, others might convert to GET if not careful
-            // We'll stick to GET for proxy compatibility if POST fails, but V2 supports GET.
-            // Let's retry using GET via proxy as it is safer for simple proxies
-            
-            const getUrl = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_API_KEY}&message=${encodeURIComponent(message)}&language=english&route=q&numbers=${formattedPhone}&flash=0`;
-            const finalProxyUrl = proxyUrl.includes('corsproxy') 
-                ? `https://corsproxy.io/?${encodeURIComponent(getUrl)}`
-                : proxyUrl.replace(fast2SmsUrl, getUrl); // Replace base URL with full GET URL
-
-            const response = await fetch(finalProxyUrl, {
-                method: 'GET', // Proxies usually handle GET better
-                headers: {
-                    'Accept': 'application/json',
-                }
+            console.log(`Trying SMS via: ${proxyUrl}`);
+            const response = await fetch(proxyUrl, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
             });
 
             if (!response.ok) {
-                 console.warn("Proxy response not OK");
+                 console.warn(`Proxy ${proxyUrl} failed with status: ${response.status}`);
                  continue;
             }
 
             const text = await response.text();
-            console.log("Raw Response:", text);
-
             let data;
             try {
                 data = JSON.parse(text);
-                // AllOrigins wraps response in 'contents' sometimes if not using /raw
+                // Handle wrapped responses if any
                 if (data.contents) {
                      try { data = JSON.parse(data.contents); } catch(e) {}
                 }
             } catch (e) {
-                console.warn("Could not parse JSON", e);
+                console.warn("JSON Parse Error on SMS response", e);
                 continue;
             }
 
             if (data && data.return === true) {
+                console.log("SMS Success:", data);
                 return { success: true };
             } else if (data && data.message) {
                  return { success: false, error: "Fast2SMS Error: " + data.message };
             }
         } catch (error) {
-            console.error("Proxy Network Error:", error);
+            console.error("SMS Network Error:", error);
         }
     }
 
     return { success: false, error: "Network Error: Could not reach Fast2SMS via any proxy. Check Internet." };
-  };
-
-  const handleTestSMS = async () => {
-      if (!currentUser) return;
-      alert(`Sending test SMS to Caretaker: ${currentUser.caretakerPhone}...`);
-      const result = await sendSmsViaApi(currentUser.caretakerPhone, "MediRemind Test: This is a connection check. SMS is working!");
-      if (result.success) {
-          alert("Success! SMS sent. Check delivery.");
-      } else {
-          alert(`Failed: ${result.error}`);
-      }
   };
 
   const handleReminderTimeout = async () => {
@@ -326,6 +273,7 @@ const App: React.FC = () => {
     setLastSmsTime(prev => ({ ...prev, [medicine.id]: now }));
     const foodInstruction = medicine.beforeFood ? 'BEFORE' : 'AFTER';
     
+    // Exact format requested
     const messageContent = `MediRemind:\nTake ${medicine.pills} pill(s) of\n${medicine.name} (${medicine.dosage}mg)\n${foodInstruction} food.\nTime: ${formatTime12Hour(medicine.schedule.time)}.`;
     
     const result = await sendSmsViaApi(targetPhone, messageContent);
@@ -342,8 +290,8 @@ const App: React.FC = () => {
   };
 
   const checkReminders = useCallback(() => {
-    if (activeReminder) return; 
-
+    // We removed the 'if (activeReminder) return' to ensure SMS sends even if modal is open for another med
+    
     const now = new Date();
     const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' });
     const currentTimeStr = now.toTimeString().substring(0, 5); 
@@ -358,6 +306,7 @@ const App: React.FC = () => {
       const schedMinutes = schedH * 60 + schedM;
       const diff = currentMinutes - schedMinutes;
 
+      // Smart Reminder: Show if opened within 30 mins
       if (diff >= 0 && diff <= 30) {
         const takenToday = allLogs.some(log => 
           log.medicineId === med.id && 
@@ -372,7 +321,13 @@ const App: React.FC = () => {
         );
 
         if (!takenToday && !missedToday) {
-           setActiveReminder(med);
+           // Only update modal if one isn't already active to avoid flickering, 
+           // OR if the current time matches exactly (priority)
+           if (!activeReminder || med.schedule.time === currentTimeStr) {
+               setActiveReminder(med);
+           }
+           
+           // Send SMS trigger
            if (med.schedule.time === currentTimeStr) {
                sendReminderSMS(med, false); 
            }
@@ -452,7 +407,6 @@ const App: React.FC = () => {
             medicines={userMedicines} 
             addMedicine={addMedicine} 
             logs={userLogs} 
-            onTestSMS={handleTestSMS} 
           />
         ) : (
           <PatientView medicines={userMedicines} logs={userLogs} />

@@ -35,11 +35,6 @@ const CaretakerView: React.FC<CaretakerViewProps> = ({ medicines, addMedicine, l
            <div className="bg-white p-6 rounded-lg shadow-md mt-4">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-2xl font-bold">{translations.medicineListTitle}</h3>
-                {onTestSMS && (
-                    <button onClick={onTestSMS} className="text-sm bg-gray-800 text-white px-3 py-1 rounded hover:bg-black">
-                        Test SMS System
-                    </button>
-                )}
               </div>
               <ul className="space-y-4">
                 {medicines.map(med => (
